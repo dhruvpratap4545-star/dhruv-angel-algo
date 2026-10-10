@@ -14,6 +14,15 @@ load_dotenv()
 TOTAL_USER_CAPITAL = 20000.0  # कुल निर्धारित बजट (₹20000)
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "") 
 
+# सर्वर शुरू होते ही आईपी प्रिंट करने के लिए
+try:
+    ip = requests.get('https://api.ipify.org', timeout=5).text
+    print("========================================")
+    print("MY RENDER OUTBOUND IP IS:", ip)
+    print("========================================")
+except Exception as e:
+    print("Error fetching IP:", e)
+
 # लाइव स्टॉक पूल
 LIVE_MARKET_POOL = [
     "INFY", "HDFCBANK", "RELIANCE", "TCS", "ITC", 
