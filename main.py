@@ -14,8 +14,12 @@ load_dotenv()
 TOTAL_USER_CAPITAL = 20000.0  # कुल निर्धारित बजट (₹20000)
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "") 
 
-ip = requests.get('https://api.ipify.org').text
-print("My Render Outbound IP is:", ip)
+# Render Outbound IP फ़ेच करना
+try:
+    ip = requests.get('https://api.ipify.org', timeout=5).text
+    print("My Render Outbound IP is:", ip)
+except Exception as e:
+    print("Error fetching IP:", e)
 
 # लाइव स्टॉक पूल
 LIVE_MARKET_POOL = [
@@ -23,8 +27,6 @@ LIVE_MARKET_POOL = [
     "ICICIBANK", "SBIN", "BHARTIARTL", "KOTAKBANK", "LT",
     "AXISBANK", "ASIANPAINT", "MARUTI", "SUNPHARMA", "WIPRO"
 ]
-
-market_sentiment_cache = {"status": "MARKET ACTIVE", "nifty_change": 0.35, "nifty_price": 22650.00}
 
 # एक्टिव ट्रेड स्टेट
 active_trade_state = {
@@ -51,9 +53,6 @@ realized_ledger = {
 simulated_current_prices = {}
 
 def get_ai_market_decision(symbol, current_price):
-    """
-    OpenRouter AI के माध्यम से लाइव ट्रेड निर्णय लेने का फंक्शन
-    """
     if not OPENROUTER_API_KEY:
         return "STRONG BUY ENTRY 🚀", True
 
@@ -107,7 +106,79 @@ def get_profitable_stock_price(symbol, is_new_entry=False):
     return simulated_current_prices[symbol], base
 
 # ==========================================
-# HTML & JAVASCRIPT DASHBOARD UI
+# BACKGROUND ENGINE LOOP (बैकग्राउंड थ्रेड)
+# ==========================================
+def trading_engine_loop():
+    global active_trade_state, realized_ledger
+    
+    while True:
+        try:
+            if active_trade_state["mode"] == "WAITING":
+                # नया स्टॉक चुनें
+                selected_stock = random.choice(LIVE_MARKET_POOL)
+                price, base = get_profitable_stock_price(selected_stock, is_new_entry=True)
+                
+                signal_text, action = get_ai_market_decision(selected_stock, price)
+                
+                if action:
+                    qty = int(TOTAL_USER_CAPITAL // price)
+                    if qty > 0:
+                        active_trade_state.update({
+                            "symbol": selected_stock,
+                            "allocated_capital": TOTAL_USER_CAPITAL,
+                            "quantity": qty,
+                            "entry_price": price,
+                            "live_price": price,
+                            "peak_price": price,
+                            "signal": signal_text,
+                            "pnl_pct": 0.0,
+                            "net_pnl_rs": 0.0,
+                            "mode": "ACTIVE",
+                            "result": "IN POSITION"
+                        })
+            
+            elif active_trade_state["mode"] == "ACTIVE":
+                symbol = active_trade_state["symbol"]
+                live_price, _ = get_profitable_stock_price(symbol)
+                entry_p = active_trade_state["entry_price"]
+                qty = active_trade_state["quantity"]
+                
+                if live_price > active_trade_state["peak_price"]:
+                    active_trade_state["peak_price"] = live_price
+                
+                gross_pnl = (live_price - entry_p) * qty
+                taxes = calculate_intraday_taxes(entry_p * qty, live_price * qty)
+                net_pnl = round(gross_pnl - taxes, 2)
+                pnl_pct = round(((live_price - entry_p) / entry_p) * 100, 2)
+                
+                active_trade_state["live_price"] = live_price
+                active_trade_state["net_pnl_rs"] = net_pnl
+                active_trade_state["pnl_pct"] = pnl_pct
+                
+                # एग्ज़िट स्थिति (Target or Trail)
+                if pnl_pct >= 0.5 or pnl_pct <= -0.3:
+                    realized_ledger["total_realized_pnl"] += net_pnl
+                    realized_ledger["trades_count"] += 1
+                    if net_pnl > 0:
+                        realized_ledger["wins"] += 1
+                    else:
+                        realized_ledger["losses"] += 1
+                    
+                    active_trade_state["result"] = "TARGET REACHED" if net_pnl > 0 else "SL HIT"
+                    active_trade_state["mode"] = "WAITING"
+                    time.sleep(3) # कूलडाउन
+
+        except Exception as e:
+            print(f"Engine Loop Error: {e}")
+            
+        time.sleep(2)
+
+# थ्रेड शुरू करें
+engine_thread = threading.Thread(target=trading_engine_loop, daemon=True)
+engine_thread.start()
+
+# ==========================================
+# HTML TEMPLATE & ROUTES
 # ==========================================
 HTML_TEMPLATE = """
 <!DOCTYPE html>
