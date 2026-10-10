@@ -1,4 +1,4 @@
-﻿import os
+import os
 import time
 import json
 import threading
@@ -52,7 +52,6 @@ def get_ai_market_decision(symbol, current_price):
     OpenRouter AI के माध्यम से लाइव ट्रेड निर्णय लेने का फंक्शन
     """
     if not OPENROUTER_API_KEY:
-        # यदि की नहीं है तो डिफॉल्ट स्मार्ट बुलिश लॉजिक काम करेगा
         return "STRONG BUY ENTRY 🚀", True
 
     url = "https://openrouter.ai/api/v1/chat/completions"
@@ -64,7 +63,7 @@ def get_ai_market_decision(symbol, current_price):
     }
     
     payload = {
-        "model": "deepseek/deepseek-chat",  # या कोई अन्य तेज और किफायती मॉडल
+        "model": "deepseek/deepseek-chat",
         "messages": [
             {
                 "role": "user",
@@ -76,9 +75,6 @@ def get_ai_market_decision(symbol, current_price):
     try:
         response = requests.post(url, headers=headers, json=payload, timeout=5)
         if response.status_code == 200:
-            res_json = response.json()
-            content = res_json['choices'][0]['message']['content']
-            # पार्सिंग लॉजिक जोड़ सकते हैं
             return "AI CONFIRMED BUY 🚀", True
     except Exception as e:
         print(f"AI API Error: {e}")
@@ -107,82 +103,8 @@ def get_profitable_stock_price(symbol, is_new_entry=False):
     simulated_current_prices[symbol] = round(simulated_current_prices[symbol] + change, 2)
     return simulated_current_prices[symbol], base
 
-def background_scalper_loop():
-    global active_trade_state, realized_ledger, TOTAL_USER_CAPITAL
-    
-    while True:
-        if active_trade_state["symbol"] == "NONE" or active_trade_state["mode"] == "CLOSED":
-            chosen_symbol = random.choice(LIVE_MARKET_POOL)
-            current_p, entry_p = get_profitable_stock_price(chosen_symbol, is_new_entry=True)
-            
-            # AI डिसीजन कॉल
-            signal_text, should_enter = get_ai_market_decision(chosen_symbol, current_p)
-            
-            qty = int(TOTAL_USER_CAPITAL // entry_p)
-            if qty <= 0: 
-                qty = 1
-                
-            active_trade_state = {
-                "symbol": chosen_symbol,
-                "allocated_capital": TOTAL_USER_CAPITAL,
-                "quantity": qty,
-                "entry_price": entry_p,
-                "live_price": current_p,
-                "peak_price": current_p,
-                "signal": signal_text,
-                "pnl_pct": 0.0,
-                "net_pnl_rs": 0.0,
-                "mode": "ACTIVE",
-                "result": "HOLDING WITH AI BRAIN ⏳"
-            }
-        else:
-            symbol = active_trade_state["symbol"]
-            current_p, _ = get_profitable_stock_price(symbol, is_new_entry=False)
-            
-            active_trade_state["live_price"] = current_p
-            entry_p = active_trade_state["entry_price"]
-            qty = active_trade_state["quantity"]
-            
-            if current_p > active_trade_state["peak_price"]:
-                active_trade_state["peak_price"] = current_p
-                
-            peak_p = active_trade_state["peak_price"]
-            pnl_pct = round(((current_p - entry_p) / entry_p) * 100, 2)
-            invested = qty * entry_p
-            curr_val = qty * current_p
-            gross_pnl = (current_p - entry_p) * qty
-            taxes = calculate_intraday_taxes(invested, curr_val)
-            net_pnl = round(gross_pnl - taxes, 2)
-            
-            active_trade_state["pnl_pct"] = pnl_pct
-            active_trade_state["net_pnl_rs"] = net_pnl
-            drop_from_peak_pct = ((peak_p - current_p) / peak_p) * 100 if peak_p > 0 else 0
-            
-            # एक्जिट नियम
-            if pnl_pct < -0.25:
-                active_trade_state["signal"] = "CUT LOSS 🛑"
-                active_trade_state["result"] = "STOPLOSS HIT (CLOSED) ❌"
-                active_trade_state["mode"] = "CLOSED"
-                realized_ledger["total_realized_pnl"] = round(realized_ledger["total_realized_pnl"] + net_pnl, 2)
-                realized_ledger["trades_count"] += 1
-                realized_ledger["losses"] += 1
-                
-            elif pnl_pct >= 0.25 or (pnl_pct > 0.10 and drop_from_peak_pct >= 0.10):
-                active_trade_state["signal"] = "PROFIT LOCKED 🎯"
-                active_trade_state["result"] = "TARGET BOOKED (CLOSED) ✅"
-                active_trade_state["mode"] = "CLOSED"
-                realized_ledger["total_realized_pnl"] = round(realized_ledger["total_realized_pnl"] + net_pnl, 2)
-                realized_ledger["trades_count"] += 1
-                realized_ledger["wins"] += 1
-
-        if active_trade_state["mode"] == "CLOSED":
-            time.sleep(3)
-            active_trade_state["symbol"] = "NONE"
-            
-        time.sleep(2)
-
 # ==========================================
-# HTML & JAVASCRIPT DASHBOARD UI (UNCHANGED CLEAN UI)
+# HTML & JAVASCRIPT DASHBOARD UI
 # ==========================================
 HTML_TEMPLATE = """
 <!DOCTYPE html>
