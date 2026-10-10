@@ -12,7 +12,10 @@ app = Flask(__name__)
 load_dotenv()
 
 TOTAL_USER_CAPITAL = 20000.0  # कुल निर्धारित बजट (₹20000)
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "") 
+
+ip = requests.get('https://api.ipify.org').text
+print("My Render Outbound IP is:", ip)
 
 # लाइव स्टॉक पूल
 LIVE_MARKET_POOL = [
