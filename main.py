@@ -351,10 +351,6 @@ def set_capital():
         pass
     return jsonify({"status": "success", "capital": TOTAL_USER_CAPITAL})
 
-if __name__ == "__main__":
-    t = threading.Thread(target=background_scalper_loop, daemon=True)
-    t.start()
-    print("==================================================")
-    print(" AI Scalper Engine Active: http://127.0.0.1:5000")
-    print("==================================================")
-    app.run(host='127.0.0.1', port=5000, debug=False)
+if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 10000))
+    app.run(host='0.0.0.0', port=port)
