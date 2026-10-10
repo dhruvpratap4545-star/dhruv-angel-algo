@@ -11,17 +11,9 @@ from flask import Flask, jsonify, render_template_string, request
 app = Flask(__name__)
 load_dotenv()
 
-TOTAL_USER_CAPITAL = 20000.0  # कुल निर्धारित बजट (₹20000)
+# ग्लोबल बजट वेरिएबल - यूजर द्वारा सेट किया गया मान यहाँ सुरक्षित रहेगा
+USER_CAPITAL = 20000.0  
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "") 
-
-# सर्वर शुरू होते ही आईपी प्रिंट करने के लिए
-try:
-    ip = requests.get('https://api.ipify.org', timeout=5).text
-    print("========================================")
-    print("MY RENDER OUTBOUND IP IS:", ip)
-    print("========================================")
-except Exception as e:
-    print("Error fetching IP:", e)
 
 # लाइव स्टॉक पूल
 LIVE_MARKET_POOL = [
@@ -33,7 +25,7 @@ LIVE_MARKET_POOL = [
 # एक्टिव ट्रेड स्टेट
 active_trade_state = {
     "symbol": "NONE",
-    "allocated_capital": TOTAL_USER_CAPITAL,
+    "allocated_capital": USER_CAPITAL,
     "quantity": 0,
     "entry_price": 0.0,
     "live_price": 0.0,
@@ -103,18 +95,31 @@ def get_profitable_stock_price(symbol, is_new_entry=False):
         simulated_current_prices[symbol] = base
         return base, base
     
-    change = random.uniform(-0.10, 0.55)  
+    change = random.uniform(-0.15, 0.60)  
     simulated_current_prices[symbol] = round(simulated_current_prices[symbol] + change, 2)
     return simulated_current_prices[symbol], base
 
 # ==========================================
-# BACKGROUND ENGINE LOOP
+# BACKGROUND ENGINE LOOP (DYNAMIC BUDGET)
 # ==========================================
 def trading_engine_loop():
-    global active_trade_state, realized_ledger
+    global active_trade_state, realized_ledger, USER_CAPITAL
     
     while True:
         try:
+            # यदि बजट 0 या उससे कम है, तो बोट ट्रेड होल्ड रखेगा / इंतजार करेगा
+            if USER_CAPITAL <= 0:
+                active_trade_state.update({
+                    "symbol": "NONE",
+                    "allocated_capital": 0.0,
+                    "quantity": 0,
+                    "signal": "BUDGET IS ₹0 - WAITING FOR FUNDS",
+                    "mode": "WAITING",
+                    "result": "NO CAPITAL ALLOCATED"
+                })
+                time.sleep(2)
+                continue
+
             if active_trade_state["mode"] == "WAITING":
                 selected_stock = random.choice(LIVE_MARKET_POOL)
                 price, base = get_profitable_stock_price(selected_stock, is_new_entry=True)
@@ -122,11 +127,12 @@ def trading_engine_loop():
                 signal_text, action = get_ai_market_decision(selected_stock, price)
                 
                 if action:
-                    qty = int(TOTAL_USER_CAPITAL // price)
+                    # यूजर द्वारा तय किए गए लाइव बजट के आधार पर क्वांटिटी गणना
+                    qty = int(USER_CAPITAL // price)
                     if qty > 0:
                         active_trade_state.update({
                             "symbol": selected_stock,
-                            "allocated_capital": TOTAL_USER_CAPITAL,
+                            "allocated_capital": USER_CAPITAL,
                             "quantity": qty,
                             "entry_price": price,
                             "live_price": price,
@@ -137,6 +143,15 @@ def trading_engine_loop():
                             "mode": "ACTIVE",
                             "result": "IN POSITION"
                         })
+                    else:
+                        active_trade_state.update({
+                            "symbol": selected_stock,
+                            "allocated_capital": USER_CAPITAL,
+                            "quantity": 0,
+                            "signal": "CAPITAL TOO LOW FOR 1 QTY",
+                            "mode": "WAITING",
+                            "result": "INSUFFICIENT FUNDS"
+                        })
             
             elif active_trade_state["mode"] == "ACTIVE":
                 symbol = active_trade_state["symbol"]
@@ -144,29 +159,32 @@ def trading_engine_loop():
                 entry_p = active_trade_state["entry_price"]
                 qty = active_trade_state["quantity"]
                 
-                if live_price > active_trade_state["peak_price"]:
-                    active_trade_state["peak_price"] = live_price
-                
-                gross_pnl = (live_price - entry_p) * qty
-                taxes = calculate_intraday_taxes(entry_p * qty, live_price * qty)
-                net_pnl = round(gross_pnl - taxes, 2)
-                pnl_pct = round(((live_price - entry_p) / entry_p) * 100, 2)
-                
-                active_trade_state["live_price"] = live_price
-                active_trade_state["net_pnl_rs"] = net_pnl
-                active_trade_state["pnl_pct"] = pnl_pct
-                
-                if pnl_pct >= 0.5 or pnl_pct <= -0.3:
-                    realized_ledger["total_realized_pnl"] += net_pnl
-                    realized_ledger["trades_count"] += 1
-                    if net_pnl > 0:
-                        realized_ledger["wins"] += 1
-                    else:
-                        realized_ledger["losses"] += 1
+                if qty > 0:
+                    if live_price > active_trade_state["peak_price"]:
+                        active_trade_state["peak_price"] = live_price
                     
-                    active_trade_state["result"] = "TARGET REACHED" if net_pnl > 0 else "SL HIT"
+                    gross_pnl = (live_price - entry_p) * qty
+                    taxes = calculate_intraday_taxes(entry_p * qty, live_price * qty)
+                    net_pnl = round(gross_pnl - taxes, 2)
+                    pnl_pct = round(((live_price - entry_p) / entry_p) * 100, 2)
+                    
+                    active_trade_state["live_price"] = live_price
+                    active_trade_state["net_pnl_rs"] = net_pnl
+                    active_trade_state["pnl_pct"] = pnl_pct
+                    
+                    if pnl_pct >= 0.5 or pnl_pct <= -0.3:
+                        realized_ledger["total_realized_pnl"] += net_pnl
+                        realized_ledger["trades_count"] += 1
+                        if net_pnl > 0:
+                            realized_ledger["wins"] += 1
+                        else:
+                            realized_ledger["losses"] += 1
+                        
+                        active_trade_state["result"] = "TARGET REACHED" if net_pnl > 0 else "SL HIT"
+                        active_trade_state["mode"] = "WAITING"
+                        time.sleep(3)
+                else:
                     active_trade_state["mode"] = "WAITING"
-                    time.sleep(3)
 
         except Exception as e:
             print(f"Engine Loop Error: {e}")
@@ -215,7 +233,7 @@ HTML_TEMPLATE = """
 
     <div class="control-panel">
         <div>
-            <label><b>प्रारंभिक बजट (₹): </b></label>
+            <label><b>बजट दर्ज करें (₹): </b></label>
             <input type="number" id="capitalInput" value="20000" style="background:#0f172a; border:1px solid #38bdf8; color:#38bdf8; padding:6px; border-radius:4px; font-weight:bold; width:130px;">
             <button class="btn-action" onclick="updateCapital()">बजट अपडेट करें</button>
         </div>
@@ -223,7 +241,7 @@ HTML_TEMPLATE = """
     </div>
 
     <div class="card-container">
-        <div class="card"><h3>प्रारंभिक बजट</h3><div id="initial-wallet" class="val" style="color: #93c5fd;">₹20000.00</div></div>
+        <div class="card"><h3>अलॉकेटेड बजट</h3><div id="initial-wallet" class="val" style="color: #93c5fd;">₹20000.00</div></div>
         <div class="card"><h3>बुक्ड कुल लाभ (Realized P&L)</h3><div id="realized-pnl" class="val">+₹0.00</div></div>
         <div class="card"><h3>कुल ट्रेड्स (Win / Loss)</h3><div id="trade-stats" class="val" style="color: #38bdf8;">0 (0 / 0)</div></div>
         <div class="card"><h3>वर्तमान लाइव P&L</h3><div id="live-running-pnl" class="val">₹0.00</div></div>
@@ -253,15 +271,17 @@ HTML_TEMPLATE = """
     <script>
         function updateCapital() {
             var val = parseFloat(document.getElementById('capitalInput').value);
-            if (val > 0) {
-                fetch('/api/set_capital?amount=' + val)
-                    .then(res => res.json())
-                    .then(data => { 
-                        alert('बजट सफलतापूर्वक ₹' + data.capital + ' पर सेट कर दिया गया!'); 
-                        document.getElementById('initial-wallet').innerText = '₹' + data.capital.toFixed(2);
-                        updateDashboard(); 
-                    });
+            if (isNaN(val) || val < 0) {
+                alert('कृपया वैध बजट राशि दर्ज करें!');
+                return;
             }
+            fetch('/api/set_capital?amount=' + val)
+                .then(res => res.json())
+                .then(data => { 
+                    alert('बजट सफलताપूर्वक ₹' + data.capital + ' पर सेट कर दिया गया!'); 
+                    document.getElementById('initial-wallet').innerText = '₹' + data.capital.toFixed(2);
+                    updateDashboard(); 
+                });
         }
 
         function updateDashboard() {
@@ -291,7 +311,7 @@ HTML_TEMPLATE = """
                     livePnlElem.className = item.net_pnl_rs >= 0 ? 'val profit' : 'val loss';
 
                     if (!item || item.symbol === "NONE") {
-                        tbody.innerHTML = '<tr><td colspan="10" style="color:#facc15;">एआई अगले स्टॉक को स्कैन कर रहा है...</td></tr>';
+                        tbody.innerHTML = '<tr><td colspan="10" style="color:#facc15;">' + (currentCap <= 0 ? 'बजट ₹0 है, कृपया बजट दर्ज करें।' : 'एआई अगले स्टॉक को स्कैन कर रहा है...') + '</td></tr>';
                         return;
                     }
 
@@ -340,19 +360,19 @@ def get_data():
     return jsonify({
         "trade": active_trade_state,
         "ledger": realized_ledger,
-        "capital": TOTAL_USER_CAPITAL
+        "capital": USER_CAPITAL
     })
 
 @app.route('/api/set_capital')
 def set_capital():
-    global TOTAL_USER_CAPITAL
+    global USER_CAPITAL
     try:
         amt = float(request.args.get('amount', 20000))
-        if amt > 0:
-            TOTAL_USER_CAPITAL = amt
+        if amt >= 0:
+            USER_CAPITAL = amt
     except Exception:
         pass
-    return jsonify({"status": "success", "capital": TOTAL_USER_CAPITAL})
+    return jsonify({"status": "success", "capital": USER_CAPITAL})
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
