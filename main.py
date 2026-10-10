@@ -14,13 +14,6 @@ load_dotenv()
 TOTAL_USER_CAPITAL = 20000.0  # कुल निर्धारित बजट (₹20000)
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "") 
 
-# Render Outbound IP फ़ेच करना
-try:
-    ip = requests.get('https://api.ipify.org', timeout=5).text
-    print("My Render Outbound IP is:", ip)
-except Exception as e:
-    print("Error fetching IP:", e)
-
 # लाइव स्टॉक पूल
 LIVE_MARKET_POOL = [
     "INFY", "HDFCBANK", "RELIANCE", "TCS", "ITC", 
@@ -106,7 +99,7 @@ def get_profitable_stock_price(symbol, is_new_entry=False):
     return simulated_current_prices[symbol], base
 
 # ==========================================
-# BACKGROUND ENGINE LOOP (बैकग्राउंड थ्रेड)
+# BACKGROUND ENGINE LOOP
 # ==========================================
 def trading_engine_loop():
     global active_trade_state, realized_ledger
@@ -114,7 +107,6 @@ def trading_engine_loop():
     while True:
         try:
             if active_trade_state["mode"] == "WAITING":
-                # नया स्टॉक चुनें
                 selected_stock = random.choice(LIVE_MARKET_POOL)
                 price, base = get_profitable_stock_price(selected_stock, is_new_entry=True)
                 
@@ -155,7 +147,6 @@ def trading_engine_loop():
                 active_trade_state["net_pnl_rs"] = net_pnl
                 active_trade_state["pnl_pct"] = pnl_pct
                 
-                # एग्ज़िट स्थिति (Target or Trail)
                 if pnl_pct >= 0.5 or pnl_pct <= -0.3:
                     realized_ledger["total_realized_pnl"] += net_pnl
                     realized_ledger["trades_count"] += 1
@@ -166,14 +157,13 @@ def trading_engine_loop():
                     
                     active_trade_state["result"] = "TARGET REACHED" if net_pnl > 0 else "SL HIT"
                     active_trade_state["mode"] = "WAITING"
-                    time.sleep(3) # कूलडाउन
+                    time.sleep(3)
 
         except Exception as e:
             print(f"Engine Loop Error: {e}")
             
         time.sleep(2)
 
-# थ्रेड शुरू करें
 engine_thread = threading.Thread(target=trading_engine_loop, daemon=True)
 engine_thread.start()
 
@@ -327,6 +317,14 @@ HTML_TEMPLATE = """
 @app.route('/')
 def home():
     return render_template_string(HTML_TEMPLATE)
+
+@app.route('/ip')
+def get_outbound_ip():
+    try:
+        ip = requests.get('https://api.ipify.org', timeout=5).text
+        return f"My Render Outbound IP is: {ip}"
+    except Exception as e:
+        return f"Error fetching IP: {e}"
 
 @app.route('/api/data')
 def get_data():
