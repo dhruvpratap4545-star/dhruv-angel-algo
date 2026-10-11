@@ -11,15 +11,15 @@ from flask import Flask, jsonify, render_template_string, request
 app = Flask(__name__)
 load_dotenv()
 
-# ग्लोबल बजट वेरिएबल - यूजर द्वारा सेट किया गया मान यहाँ सुरक्षित रहेगा
+# ग्लोबल बजट वेरिएबल - अब यह शुरुआत में 0 या डायनेमिक रहेगा ताकि यूजर अपनी मर्जी का बजट सेट कर सके
 USER_CAPITAL = 20000.0  
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "") 
 
-# लाइव स्टॉक पूल
+# लाइव स्टॉक पूल (विभिन्न मूल्य वाले स्टॉक्स ताकि छोटे बजट पर भी Qty मिल सके)
 LIVE_MARKET_POOL = [
+    "IDEA", "YESBANK", "SUZLON", "ZOMATO", "PNB", 
     "INFY", "HDFCBANK", "RELIANCE", "TCS", "ITC", 
-    "ICICIBANK", "SBIN", "BHARTIARTL", "KOTAKBANK", "LT",
-    "AXISBANK", "ASIANPAINT", "MARUTI", "SUNPHARMA", "WIPRO"
+    "ICICIBANK", "SBIN", "BHARTIARTL", "AXISBANK", "WIPRO"
 ]
 
 # एक्टिव ट्रेड स्टेट
@@ -43,6 +43,9 @@ realized_ledger = {
     "wins": 0,
     "losses": 0
 }
+
+# पिछले पूर्ण हुए ट्रेड्स की हिस्ट्री रखने की सूची
+trade_history_log = []
 
 simulated_current_prices = {}
 
@@ -89,7 +92,13 @@ def calculate_intraday_taxes(buy_value, sell_value):
 
 def get_profitable_stock_price(symbol, is_new_entry=False):
     global simulated_current_prices
-    base = 1200.0 if symbol in ["INFY", "TCS"] else 1500.0
+    # छोटे और बड़े दोनों प्रकार के स्टॉक प्राइस बेस
+    if symbol in ["IDEA", "YESBANK", "SUZLON"]:
+        base = 25.0
+    elif symbol in ["ZOMATO", "PNB"]:
+        base = 150.0
+    else:
+        base = 1200.0 if symbol in ["INFY", "TCS"] else 1500.0
     
     if symbol not in simulated_current_prices or is_new_entry:
         simulated_current_prices[symbol] = base
@@ -100,14 +109,33 @@ def get_profitable_stock_price(symbol, is_new_entry=False):
     return simulated_current_prices[symbol], base
 
 # ==========================================
-# BACKGROUND ENGINE LOOP (DYNAMIC BUDGET)
+# BACKGROUND ENGINE LOOP (CUSTOM BUDGET & DYNAMIC QTY)
 # ==========================================
 def trading_engine_loop():
-    global active_trade_state, realized_ledger, USER_CAPITAL
+    global active_trade_state, realized_ledger, USER_CAPITAL, trade_history_log
     
     while True:
         try:
-            # यदि बजट 0 या उससे कम है, तो बोट ट्रेड होल्ड रखेगा / इंतजार करेगा
+            # 1. वीकेंड चेक: शनिवार (5) और रविवार (6) को मार्केट बंद रहेगा
+            current_day = datetime.datetime.now().weekday()
+            if current_day >= 5:
+                active_trade_state.update({
+                    "symbol": "MARKET CLOSED",
+                    "allocated_capital": USER_CAPITAL,
+                    "quantity": 0,
+                    "entry_price": 0.0,
+                    "live_price": 0.0,
+                    "peak_price": 0.0,
+                    "signal": "WEEKEND HOLIDAY (MON-FRI ONLY) 🏖️",
+                    "pnl_pct": 0.0,
+                    "net_pnl_rs": 0.0,
+                    "mode": "WAITING",
+                    "result": "MARKET CLOSED FOR WEEKEND"
+                })
+                time.sleep(10)
+                continue
+
+            # 2. बजट चेक: यदि बजट 0 है
             if USER_CAPITAL <= 0:
                 active_trade_state.update({
                     "symbol": "NONE",
@@ -127,7 +155,7 @@ def trading_engine_loop():
                 signal_text, action = get_ai_market_decision(selected_stock, price)
                 
                 if action:
-                    # यूजर द्वारा तय किए गए लाइव बजट के आधार पर क्वांटिटी गणना
+                    # यूजर के कस्टम बजट (चाहे ₹200 हो या ₹5,00,000) के आधार पर सटीक क्वांटिटी गणना
                     qty = int(USER_CAPITAL // price)
                     if qty > 0:
                         active_trade_state.update({
@@ -148,9 +176,9 @@ def trading_engine_loop():
                             "symbol": selected_stock,
                             "allocated_capital": USER_CAPITAL,
                             "quantity": 0,
-                            "signal": "CAPITAL TOO LOW FOR 1 QTY",
+                            "signal": f"BUDGET ₹{USER_CAPITAL} TOO LOW FOR {selected_stock} (PRICE: ₹{price})",
                             "mode": "WAITING",
-                            "result": "INSUFFICIENT FUNDS"
+                            "result": "INSUFFICIENT FUNDS FOR 1 QTY"
                         })
             
             elif active_trade_state["mode"] == "ACTIVE":
@@ -180,7 +208,20 @@ def trading_engine_loop():
                         else:
                             realized_ledger["losses"] += 1
                         
-                        active_trade_state["result"] = "TARGET REACHED" if net_pnl > 0 else "SL HIT"
+                        result_text = "TARGET REACHED" if net_pnl > 0 else "SL HIT"
+                        active_trade_state["result"] = result_text
+                        
+                        # ट्रेड पूरा होते ही हिस्ट्री लॉग में जोड़ें
+                        trade_history_log.insert(0, {
+                            "time": datetime.datetime.now().strftime("%H:%M:%S"),
+                            "symbol": symbol,
+                            "qty": qty,
+                            "entry": entry_p,
+                            "exit": live_price,
+                            "pnl": net_pnl,
+                            "result": result_text
+                        })
+                        
                         active_trade_state["mode"] = "WAITING"
                         time.sleep(3)
                 else:
@@ -215,33 +256,38 @@ HTML_TEMPLATE = """
         .card h3 { margin: 0; color: #94a3b8; font-size: 13px; }
         .card .val { font-size: 22px; font-weight: bold; margin-top: 8px; }
         table { width: 100%; border-collapse: collapse; background: #1e293b; border-radius: 8px; overflow: hidden; margin-top: 15px; }
-        th, td { padding: 14px 12px; text-align: center; border-bottom: 1px solid #334155; font-size: 14px; }
+        th, td { padding: 12px 10px; text-align: center; border-bottom: 1px solid #334155; font-size: 14px; }
         th { background-color: #334155; color: #38bdf8; }
         .profit { color: #4ade80; font-weight: bold; }
         .loss { color: #f87171; font-weight: bold; }
         .badge { background: rgba(56, 189, 248, 0.15); color: #38bdf8; padding: 6px 10px; border-radius: 4px; font-weight: bold; }
+        
+        .history-container { background: #1e293b; border: 1px solid #334155; border-radius: 8px; padding: 15px; margin-top: 25px; }
+        .history-scroll-box { max-height: 180px; overflow-y: auto; margin-top: 10px; border-radius: 6px; border: 1px solid #0f172a; }
+        .history-scroll-box::-webkit-scrollbar { width: 6px; }
+        .history-scroll-box::-webkit-scrollbar-thumb { background: #38bdf8; border-radius: 3px; }
     </style>
 </head>
 <body>
     <h1>🛡 ओपनरूटर AI पावर्ड स्कैल्पिंग इंजन</h1>
-    <p class="subtitle">स्मार्ट एआई ब्रेन एक्टिव: उच्च सटीकता के साथ लाइव ट्रेड्स | समय: <span id="clock">--:--:--</span></p>
+    <p class="subtitle">स्मार्ट एआई ब्रेन एक्टिव: कस्टम बजट ऑटोमेशन (सोमवार - शुक्रवार) | समय: <span id="clock">--:--:--</span></p>
 
     <div class="banner">
-        <div><b>📊 AI मार्केट स्टेटस:</b> <span id="nifty-status" style="color: #4ade80;">बुलिश ट्रेंड एक्टिव 🚀</span></div>
-        <div><b>मोड:</b> <span style="color: #38bdf8;">प्राइवेट पर्सनल ऑटोमेशन ✅</span></div>
+        <div><b>📊 मार्केट शेड्यूल:</b> <span style="color: #38bdf8;">सोमवार से शुक्रवार (संडे-सैटरडे ऑटो-ऑफ) 🟢</span></div>
+        <div><b>मोड:</b> <span style="color: #38bdf8;">कस्टम बजट यूजर कंट्रोल ✅</span></div>
     </div>
 
     <div class="control-panel">
         <div>
             <label><b>बजट दर्ज करें (₹): </b></label>
-            <input type="number" id="capitalInput" value="20000" style="background:#0f172a; border:1px solid #38bdf8; color:#38bdf8; padding:6px; border-radius:4px; font-weight:bold; width:130px;">
+            <input type="number" id="capitalInput" value="2000" style="background:#0f172a; border:1px solid #38bdf8; color:#38bdf8; padding:6px; border-radius:4px; font-weight:bold; width:130px;">
             <button class="btn-action" onclick="updateCapital()">बजट अपडेट करें</button>
         </div>
-        <div style="color: #94a3b8; font-size: 13px;">कुल वॉलेट मूल्य: <b id="total-wallet-val" style="color: #4ade80;">₹20000.00</b></div>
+        <div style="color: #94a3b8; font-size: 13px;">कुल वॉलेट मूल्य: <b id="total-wallet-val" style="color: #4ade80;">₹2000.00</b></div>
     </div>
 
     <div class="card-container">
-        <div class="card"><h3>अलॉकेटेड बजट</h3><div id="initial-wallet" class="val" style="color: #93c5fd;">₹20000.00</div></div>
+        <div class="card"><h3>अलॉकेटेड बजट</h3><div id="initial-wallet" class="val" style="color: #93c5fd;">₹2000.00</div></div>
         <div class="card"><h3>बुक्ड कुल लाभ (Realized P&L)</h3><div id="realized-pnl" class="val">+₹0.00</div></div>
         <div class="card"><h3>कुल ट्रेड्स (Win / Loss)</h3><div id="trade-stats" class="val" style="color: #38bdf8;">0 (0 / 0)</div></div>
         <div class="card"><h3>वर्तमान लाइव P&L</h3><div id="live-running-pnl" class="val">₹0.00</div></div>
@@ -268,6 +314,29 @@ HTML_TEMPLATE = """
         </tbody>
     </table>
 
+    <!-- स्क्रॉलबल ट्रेड हिस्ट्री बॉक्स -->
+    <div class="history-container">
+        <h3 style="color: #38bdf8; margin: 0 0 10px 0; font-size: 16px;">📜 हालिया पूर्ण ट्रेड हिस्ट्री (Recent Trade History Log):</h3>
+        <div class="history-scroll-box">
+            <table>
+                <thead>
+                    <tr>
+                        <th>समय</th>
+                        <th>स्टॉक</th>
+                        <th>मात्रा (Qty)</th>
+                        <th>एंट्री प्राइस</th>
+                        <th>निकास (Exit)</th>
+                        <th>शुद्ध लाभ/हानि (P&L)</th>
+                        <th>परिणाम</th>
+                    </tr>
+                </thead>
+                <tbody id="history-table-body">
+                    <tr><td colspan="7" style="color: #94a3b8;">अभी तक कोई ट्रेड पूरा नहीं हुआ है...</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
     <script>
         function updateCapital() {
             var val = parseFloat(document.getElementById('capitalInput').value);
@@ -278,7 +347,7 @@ HTML_TEMPLATE = """
             fetch('/api/set_capital?amount=' + val)
                 .then(res => res.json())
                 .then(data => { 
-                    alert('बजट सफलताપूर्वक ₹' + data.capital + ' पर सेट कर दिया गया!'); 
+                    alert('बजट सफलतापूर्वक ₹' + data.capital + ' पर सेट कर दिया गया!'); 
                     document.getElementById('initial-wallet').innerText = '₹' + data.capital.toFixed(2);
                     updateDashboard(); 
                 });
@@ -291,9 +360,11 @@ HTML_TEMPLATE = """
                 .then(res => res.json())
                 .then(data => {
                     var tbody = document.getElementById('table-body');
+                    var historyBody = document.getElementById('history-table-body');
                     var item = data.trade;
                     var ledger = data.ledger;
                     var currentCap = data.capital;
+                    var history = data.history;
 
                     document.getElementById('initial-wallet').innerText = '₹' + currentCap.toFixed(2);
                     
@@ -310,29 +381,49 @@ HTML_TEMPLATE = """
                     livePnlElem.innerText = (item.net_pnl_rs >= 0 ? '+₹' : '-₹') + Math.abs(item.net_pnl_rs).toFixed(2);
                     livePnlElem.className = item.net_pnl_rs >= 0 ? 'val profit' : 'val loss';
 
-                    if (!item || item.symbol === "NONE") {
-                        tbody.innerHTML = '<tr><td colspan="10" style="color:#facc15;">' + (currentCap <= 0 ? 'बजट ₹0 है, कृपया बजट दर्ज करें।' : 'एआई अगले स्टॉक को स्कैन कर रहा है...') + '</td></tr>';
-                        return;
+                    if (!item || item.symbol === "NONE" || item.symbol === "MARKET CLOSED") {
+                        var msg = item.symbol === "MARKET CLOSED" ? 'शनिवार/रविवार (वीकेंड) के कारण मार्केट बंद है। बोट सोमवार को फिर से सक्रिय होगी 🏖️' : (currentCap <= 0 ? 'बजट ₹0 है, कृपया बजट दर्ज करें।' : 'एआई अगले स्टॉक को स्कैन कर रहा है...');
+                        tbody.innerHTML = '<tr><td colspan="10" style="color:#facc15;">' + msg + '</td></tr>';
+                    } else {
+                        var pnlClass = item.pnl_pct >= 0 ? 'profit' : 'loss';
+                        var pnlSign = item.pnl_pct >= 0 ? '+' : '';
+                        var netPnlClass = item.net_pnl_rs >= 0 ? 'profit' : 'loss';
+                        var netPnlSign = item.net_pnl_rs >= 0 ? '+₹' : '-₹';
+
+                        var row = '<tr>' +
+                            '<td><b>' + item.symbol + '</b></td>' +
+                            '<td>₹' + item.allocated_capital + '</td>' +
+                            '<td><b>' + item.quantity + '</b></td>' +
+                            '<td>₹' + item.entry_price.toFixed(2) + '</td>' +
+                            '<td style="color: #facc15;"><b>₹' + item.peak_price.toFixed(2) + '</b></td>' +
+                            '<td><b>₹' + item.live_price.toFixed(2) + '</b></td>' +
+                            '<td><span class="badge">' + item.signal + '</span></td>' +
+                            '<td class="' + pnlClass + '">' + pnlSign + item.pnl_pct.toFixed(2) + '%</td>' +
+                            '<td class="' + netPnlClass + '">' + netPnlSign + Math.abs(item.net_pnl_rs).toFixed(2) + '</td>' +
+                            '<td><b>' + item.result + '</b></td>' +
+                            '</tr>';
+                        tbody.innerHTML = row;
                     }
 
-                    var pnlClass = item.pnl_pct >= 0 ? 'profit' : 'loss';
-                    var pnlSign = item.pnl_pct >= 0 ? '+' : '';
-                    var netPnlClass = item.net_pnl_rs >= 0 ? 'profit' : 'loss';
-                    var netPnlSign = item.net_pnl_rs >= 0 ? '+₹' : '-₹';
-
-                    var row = '<tr>' +
-                        '<td><b>' + item.symbol + '</b></td>' +
-                        '<td>₹' + item.allocated_capital + '</td>' +
-                        '<td><b>' + item.quantity + '</b></td>' +
-                        '<td>₹' + item.entry_price.toFixed(2) + '</td>' +
-                        '<td style="color: #facc15;"><b>₹' + item.peak_price.toFixed(2) + '</b></td>' +
-                        '<td><b>₹' + item.live_price.toFixed(2) + '</b></td>' +
-                        '<td><span class="badge">' + item.signal + '</span></td>' +
-                        '<td class="' + pnlClass + '">' + pnlSign + item.pnl_pct.toFixed(2) + '%</td>' +
-                        '<td class="' + netPnlClass + '">' + netPnlSign + Math.abs(item.net_pnl_rs).toFixed(2) + '</td>' +
-                        '<td><b>' + item.result + '</b></td>' +
-                        '</tr>';
-                    tbody.innerHTML = row;
+                    if (!history || history.length === 0) {
+                        historyBody.innerHTML = '<tr><td colspan="7" style="color: #94a3b8;">अभी तक कोई ट्रेड पूरा नहीं हुआ है...</td></tr>';
+                    } else {
+                        var hRows = '';
+                        history.forEach(function(h) {
+                            var hClass = h.pnl >= 0 ? 'profit' : 'loss';
+                            var hSign = h.pnl >= 0 ? '+₹' : '-₹';
+                            hRows += '<tr>' +
+                                '<td>' + h.time + '</td>' +
+                                '<td><b>' + h.symbol + '</b></td>' +
+                                '<td>' + h.qty + '</td>' +
+                                '<td>₹' + h.entry.toFixed(2) + '</td>' +
+                                '<td>₹' + h.exit.toFixed(2) + '</td>' +
+                                '<td class="' + hClass + '">' + hSign + Math.abs(h.pnl).toFixed(2) + '</td>' +
+                                '<td><b>' + h.result + '</b></td>' +
+                                '</tr>';
+                        });
+                        historyBody.innerHTML = hRows;
+                    }
                 });
         }
 
@@ -360,14 +451,15 @@ def get_data():
     return jsonify({
         "trade": active_trade_state,
         "ledger": realized_ledger,
-        "capital": USER_CAPITAL
+        "capital": USER_CAPITAL,
+        "history": trade_history_log
     })
 
 @app.route('/api/set_capital')
 def set_capital():
     global USER_CAPITAL
     try:
-        amt = float(request.args.get('amount', 20000))
+        amt = float(request.args.get('amount', 2000))
         if amt >= 0:
             USER_CAPITAL = amt
     except Exception:
