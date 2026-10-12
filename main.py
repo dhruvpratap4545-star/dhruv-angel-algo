@@ -106,26 +106,26 @@ def get_profitable_stock_price(symbol, is_new_entry=False):
     return simulated_current_prices[symbol], base
 
 # ==========================================
-# STRICT MARKET TIMING FUNCTION (9:15 AM to 3:20 PM, Mon-Fri)
+# STRICT MARKET TIMING FUNCTION (09:20 AM to 03:20 PM, Mon-Fri)
 # ==========================================
 def is_market_active():
     now = datetime.datetime.now()
     current_day = now.weekday()  # 0=सोमवार, 4=शुक्रवार, 5=शनिवार, 6=रविवार
     
-    # 1. वीकेंड चेक (शनिवार और रविवार को पूरी तरह बंद)
+    # 1. वीकेंड चेक (शनिवार और रविवार)
     if current_day >= 5:
         return False, "WEEKEND HOLIDAY (MON-FRI ONLY) 🏖️"
         
     current_hour = now.hour
     current_minute = now.minute
-    
-    # कुल मिनटों में बदलकर सटीक तुलना (सुविधा के लिए)
     total_current_minutes = current_hour * 60 + current_minute
-    start_minutes = 9 * 60 + 15   # 09:15 AM = 555 मिनट
+    
+    # आपकी सख्त आवश्यकतानुसार: 9:20 AM से 3:20 PM
+    start_minutes = 9 * 60 + 20   # 09:20 AM = 560 मिनट
     end_minutes = 15 * 60 + 20    # 03:20 PM = 920 मिनट
     
     if total_current_minutes < start_minutes:
-        return False, "WAITING FOR MARKET OPEN (09:15 AM) ⏰"
+        return False, "WAITING FOR MARKET OPEN (09:20 AM) ⏰"
         
     if total_current_minutes > end_minutes:
         return False, "MARKET CLOSED FOR TODAY (3:20 PM) 🌙"
@@ -142,7 +142,7 @@ def trading_engine_loop():
         try:
             is_active, status_message = is_market_active()
             
-            # यदि बाजार बंद है या समय सीमा से बाहर है
+            # यदि बाजार बंद है या समय सीमा (9:20 AM - 3:20 PM) के बाहर है
             if not is_active:
                 active_trade_state.update({
                     "symbol": "MARKET CLOSED" if "CLOSED" in status_message or "WEEKEND" in status_message else "PRE-OPEN",
@@ -157,7 +157,7 @@ def trading_engine_loop():
                     "mode": "WAITING",
                     "result": "TRADING STOPPED"
                 })
-                time.sleep(5)
+                time.sleep(3)
                 continue
 
             # बजट चेक
@@ -206,7 +206,7 @@ def trading_engine_loop():
                         })
             
             elif active_trade_state["mode"] == "ACTIVE":
-                # हर बार एक्टिव ट्रेड के दौरान भी टाइम चेक होगा
+                # सुरक्षा चेक: हर लूप चक्र में जांचें कि क्या समय सीमा खत्म हो चुकी है
                 active_check, _ = is_market_active()
                 if not active_check:
                     active_trade_state["mode"] = "WAITING"
@@ -299,11 +299,11 @@ HTML_TEMPLATE = """
 </head>
 <body>
     <h1>🛡 ओपनरूटर AI पावर्ड स्कैल्पिंग इंजन</h1>
-    <p class="subtitle">स्मार्ट एआई ब्रेन एक्टिव: मार्केट समय (सोमवार - शुक्रवार, सुबह 9:15 से दोपहर 3:20) | समय: <span id="clock">--:--:--</span></p>
+    <p class="subtitle">स्मार्ट एआई ब्रेन एक्टिव: मार्केट समय (सोमवार - शुक्रवार, सुबह 9:20 से दोपहर 3:20) | समय: <span id="clock">--:--:--</span></p>
 
     <div class="banner">
-        <div><b>📊 मार्केट शेड्यूल:</b> <span style="color: #38bdf8;">सोमवार से शुक्रवार (09:15 AM - 03:20 PM) 🟢</span></div>
-        <div><b>मोड:</b> <span style="color: #38bdf8;">समय पाबंद ऑटोमेशन ✅</span></div>
+        <div><b>📊 मार्केट शेड्यूल:</b> <span style="color: #38bdf8;">सोमवार से शुक्रवार (09:20 AM - 03:20 PM) 🟢</span></div>
+        <div><b>मोड:</b> <span style="color: #38bdf8;">सख्त समय पाबंद ऑटोमेशन ✅</span></div>
     </div>
 
     <div class="control-panel">
