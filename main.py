@@ -121,7 +121,7 @@ def trading_engine_loop():
             current_time = now.time()
             
             market_start = datetime.time(9, 15)
-            market_end = datetime.time(15, 30)
+            market_end = datetime.time(15, 20)  # ठीक 3:20 PM पर बंद
 
             # 1. वीकेंड चेक: शनिवार (5) और रविवार (6) को मार्केट बंद रहेगा
             if current_day >= 5:
@@ -141,7 +141,7 @@ def trading_engine_loop():
                 time.sleep(10)
                 continue
 
-            # 2. समय चेक: 9:15 AM से पहले या 3:30 PM के बाद इंजन ट्रेड नहीं करेगा
+            # 2. समय चेक: 9:15 AM से पहले या 3:20 PM के बाद इंजन ट्रेड नहीं करेगा
             if current_time < market_start:
                 active_trade_state.update({
                     "symbol": "PRE-OPEN",
@@ -167,7 +167,7 @@ def trading_engine_loop():
                     "entry_price": 0.0,
                     "live_price": 0.0,
                     "peak_price": 0.0,
-                    "signal": "MARKET CLOSED FOR TODAY (3:30 PM) 🌙",
+                    "signal": "MARKET CLOSED FOR TODAY (3:20 PM) 🌙",
                     "pnl_pct": 0.0,
                     "net_pnl_rs": 0.0,
                     "mode": "WAITING",
@@ -309,10 +309,10 @@ HTML_TEMPLATE = """
 </head>
 <body>
     <h1>🛡 ओपनरूटर AI पावर्ड स्कैल्पिंग इंजन</h1>
-    <p class="subtitle">स्मार्ट एआई ब्रेन एक्टिव: मार्केट समय (सोमवार - शुक्रवार, सुबह 9:15 से शाम 3:30) | समय: <span id="clock">--:--:--</span></p>
+    <p class="subtitle">स्मार्ट एआई ब्रेन एक्टिव: मार्केट समय (सोमवार - शुक्रवार, सुबह 9:15 से दोपहर 3:20) | समय: <span id="clock">--:--:--</span></p>
 
     <div class="banner">
-        <div><b>📊 मार्केट शेड्यूल:</b> <span style="color: #38bdf8;">सोमवार से शुक्रवार (09:15 AM - 03:30 PM) 🟢</span></div>
+        <div><b>📊 मार्केट शेड्यूल:</b> <span style="color: #38bdf8;">सोमवार से शुक्रवार (09:15 AM - 03:20 PM) 🟢</span></div>
         <div><b>मोड:</b> <span style="color: #38bdf8;">समय पाबंद ऑटोमेशन ✅</span></div>
     </div>
 
