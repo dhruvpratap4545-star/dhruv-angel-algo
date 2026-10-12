@@ -106,75 +106,61 @@ def get_profitable_stock_price(symbol, is_new_entry=False):
     return simulated_current_prices[symbol], base
 
 # ==========================================
-# BACKGROUND ENGINE LOOP (STRICT MARKET TIMING)
+# STRICT MARKET TIMING FUNCTION (9:15 AM to 3:20 PM, Mon-Fri)
+# ==========================================
+def is_market_active():
+    now = datetime.datetime.now()
+    current_day = now.weekday()  # 0=सोमवार, 4=शुक्रवार, 5=शनिवार, 6=रविवार
+    
+    # 1. वीकेंड चेक (शनिवार और रविवार को पूरी तरह बंद)
+    if current_day >= 5:
+        return False, "WEEKEND HOLIDAY (MON-FRI ONLY) 🏖️"
+        
+    current_hour = now.hour
+    current_minute = now.minute
+    
+    # कुल मिनटों में बदलकर सटीक तुलना (सुविधा के लिए)
+    total_current_minutes = current_hour * 60 + current_minute
+    start_minutes = 9 * 60 + 15   # 09:15 AM = 555 मिनट
+    end_minutes = 15 * 60 + 20    # 03:20 PM = 920 मिनट
+    
+    if total_current_minutes < start_minutes:
+        return False, "WAITING FOR MARKET OPEN (09:15 AM) ⏰"
+        
+    if total_current_minutes > end_minutes:
+        return False, "MARKET CLOSED FOR TODAY (3:20 PM) 🌙"
+        
+    return True, "MARKET IS LIVE 🟢"
+
+# ==========================================
+# BACKGROUND ENGINE LOOP
 # ==========================================
 def trading_engine_loop():
     global active_trade_state, realized_ledger, USER_CAPITAL, trade_history_log
     
     while True:
         try:
-            now = datetime.datetime.now()
-            current_day = now.weekday() # सोमवार=0 से शुक्रवार=4, शनि=5, रवि=6
-            current_time = now.time()
+            is_active, status_message = is_market_active()
             
-            market_start = datetime.time(9, 15)
-            market_end = datetime.time(15, 20)  # सख्त पाबंदी: दोपहर 3:20 PM
-
-            # 1. वीकेंड चेक (शनिवार और रविवार)
-            if current_day >= 5:
+            # यदि बाजार बंद है या समय सीमा से बाहर है
+            if not is_active:
                 active_trade_state.update({
-                    "symbol": "MARKET CLOSED",
+                    "symbol": "MARKET CLOSED" if "CLOSED" in status_message or "WEEKEND" in status_message else "PRE-OPEN",
                     "allocated_capital": USER_CAPITAL,
                     "quantity": 0,
                     "entry_price": 0.0,
                     "live_price": 0.0,
                     "peak_price": 0.0,
-                    "signal": "WEEKEND HOLIDAY (MON-FRI ONLY) 🏖️",
+                    "signal": status_message,
                     "pnl_pct": 0.0,
                     "net_pnl_rs": 0.0,
                     "mode": "WAITING",
-                    "result": "MARKET CLOSED FOR WEEKEND"
-                })
-                time.sleep(10)
-                continue
-
-            # 2. समय से पहले (Morning < 9:15 AM)
-            if current_time < market_start:
-                active_trade_state.update({
-                    "symbol": "PRE-OPEN",
-                    "allocated_capital": USER_CAPITAL,
-                    "quantity": 0,
-                    "entry_price": 0.0,
-                    "live_price": 0.0,
-                    "peak_price": 0.0,
-                    "signal": "WAITING FOR MARKET OPEN (09:15 AM) ⏰",
-                    "pnl_pct": 0.0,
-                    "net_pnl_rs": 0.0,
-                    "mode": "WAITING",
-                    "result": "MARKET NOT OPEN YET"
+                    "result": "TRADING STOPPED"
                 })
                 time.sleep(5)
                 continue
 
-            # 3. समय के बाद (Evening > 3:20 PM) - अब यह किसी भी एक्टिव ट्रेड को तुरंत काटेगा और रोकेगा
-            if current_time > market_end:
-                active_trade_state.update({
-                    "symbol": "MARKET CLOSED",
-                    "allocated_capital": USER_CAPITAL,
-                    "quantity": 0,
-                    "entry_price": 0.0,
-                    "live_price": 0.0,
-                    "peak_price": 0.0,
-                    "signal": "MARKET CLOSED FOR TODAY (3:20 PM) 🌙",
-                    "pnl_pct": 0.0,
-                    "net_pnl_rs": 0.0,
-                    "mode": "WAITING",
-                    "result": "TRADING SESSION ENDED"
-                })
-                time.sleep(10)
-                continue
-
-            # 4. बजट चेक
+            # बजट चेक
             if USER_CAPITAL <= 0:
                 active_trade_state.update({
                     "symbol": "NONE",
@@ -187,7 +173,6 @@ def trading_engine_loop():
                 time.sleep(2)
                 continue
 
-            # बाजार खुलने के समय के भीतर ही यह ट्रेडिंग लॉजिक चलेगा
             if active_trade_state["mode"] == "WAITING":
                 selected_stock = random.choice(LIVE_MARKET_POOL)
                 price, base = get_profitable_stock_price(selected_stock, is_new_entry=True)
@@ -221,8 +206,9 @@ def trading_engine_loop():
                         })
             
             elif active_trade_state["mode"] == "ACTIVE":
-                # हर लूप में यह भी चेक होगा कि कहीं समय 3:20 तो नहीं पार हो गया
-                if datetime.datetime.now().time() > market_end:
+                # हर बार एक्टिव ट्रेड के दौरान भी टाइम चेक होगा
+                active_check, _ = is_market_active()
+                if not active_check:
                     active_trade_state["mode"] = "WAITING"
                     continue
 
