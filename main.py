@@ -109,15 +109,21 @@ def get_profitable_stock_price(symbol, is_new_entry=False):
     return simulated_current_prices[symbol], base
 
 # ==========================================
-# BACKGROUND ENGINE LOOP (CUSTOM BUDGET & DYNAMIC QTY)
+# BACKGROUND ENGINE LOOP (MARKET TIME & WEEKEND CHECK)
 # ==========================================
 def trading_engine_loop():
     global active_trade_state, realized_ledger, USER_CAPITAL, trade_history_log
     
     while True:
         try:
+            now = datetime.datetime.now()
+            current_day = now.weekday() # सोमवार=0 से रविवार=6
+            current_time = now.time()
+            
+            market_start = datetime.time(9, 15)
+            market_end = datetime.time(15, 30)
+
             # 1. वीकेंड चेक: शनिवार (5) और रविवार (6) को मार्केट बंद रहेगा
-            current_day = datetime.datetime.now().weekday()
             if current_day >= 5:
                 active_trade_state.update({
                     "symbol": "MARKET CLOSED",
@@ -135,7 +141,42 @@ def trading_engine_loop():
                 time.sleep(10)
                 continue
 
-            # 2. बजट चेक: यदि बजट 0 है
+            # 2. समय चेक: 9:15 AM से पहले या 3:30 PM के बाद इंजन ट्रेड नहीं करेगा
+            if current_time < market_start:
+                active_trade_state.update({
+                    "symbol": "PRE-OPEN",
+                    "allocated_capital": USER_CAPITAL,
+                    "quantity": 0,
+                    "entry_price": 0.0,
+                    "live_price": 0.0,
+                    "peak_price": 0.0,
+                    "signal": "WAITING FOR MARKET OPEN (09:15 AM) ⏰",
+                    "pnl_pct": 0.0,
+                    "net_pnl_rs": 0.0,
+                    "mode": "WAITING",
+                    "result": "MARKET NOT OPEN YET"
+                })
+                time.sleep(5)
+                continue
+
+            if current_time > market_end:
+                active_trade_state.update({
+                    "symbol": "MARKET CLOSED",
+                    "allocated_capital": USER_CAPITAL,
+                    "quantity": 0,
+                    "entry_price": 0.0,
+                    "live_price": 0.0,
+                    "peak_price": 0.0,
+                    "signal": "MARKET CLOSED FOR TODAY (3:30 PM) 🌙",
+                    "pnl_pct": 0.0,
+                    "net_pnl_rs": 0.0,
+                    "mode": "WAITING",
+                    "result": "TRADING SESSION ENDED"
+                })
+                time.sleep(10)
+                continue
+
+            # 3. बजट चेक: यदि बजट 0 है
             if USER_CAPITAL <= 0:
                 active_trade_state.update({
                     "symbol": "NONE",
@@ -155,7 +196,6 @@ def trading_engine_loop():
                 signal_text, action = get_ai_market_decision(selected_stock, price)
                 
                 if action:
-                    # यूजर के कस्टम बजट (चाहे ₹200 हो या ₹5,00,000) के आधार पर सटीक क्वांटिटी गणना
                     qty = int(USER_CAPITAL // price)
                     if qty > 0:
                         active_trade_state.update({
@@ -211,7 +251,6 @@ def trading_engine_loop():
                         result_text = "TARGET REACHED" if net_pnl > 0 else "SL HIT"
                         active_trade_state["result"] = result_text
                         
-                        # ट्रेड पूरा होते ही हिस्ट्री लॉग में जोड़ें
                         trade_history_log.insert(0, {
                             "time": datetime.datetime.now().strftime("%H:%M:%S"),
                             "symbol": symbol,
@@ -270,11 +309,11 @@ HTML_TEMPLATE = """
 </head>
 <body>
     <h1>🛡 ओपनरूटर AI पावर्ड स्कैल्पिंग इंजन</h1>
-    <p class="subtitle">स्मार्ट एआई ब्रेन एक्टिव: कस्टम बजट ऑटोमेशन (सोमवार - शुक्रवार) | समय: <span id="clock">--:--:--</span></p>
+    <p class="subtitle">स्मार्ट एआई ब्रेन एक्टिव: मार्केट समय (सोमवार - शुक्रवार, सुबह 9:15 से शाम 3:30) | समय: <span id="clock">--:--:--</span></p>
 
     <div class="banner">
-        <div><b>📊 मार्केट शेड्यूल:</b> <span style="color: #38bdf8;">सोमवार से शुक्रवार (संडे-सैटरडे ऑटो-ऑफ) 🟢</span></div>
-        <div><b>मोड:</b> <span style="color: #38bdf8;">कस्टम बजट यूजर कंट्रोल ✅</span></div>
+        <div><b>📊 मार्केट शेड्यूल:</b> <span style="color: #38bdf8;">सोमवार से शुक्रवार (09:15 AM - 03:30 PM) 🟢</span></div>
+        <div><b>मोड:</b> <span style="color: #38bdf8;">समय पाबंद ऑटोमेशन ✅</span></div>
     </div>
 
     <div class="control-panel">
@@ -381,8 +420,8 @@ HTML_TEMPLATE = """
                     livePnlElem.innerText = (item.net_pnl_rs >= 0 ? '+₹' : '-₹') + Math.abs(item.net_pnl_rs).toFixed(2);
                     livePnlElem.className = item.net_pnl_rs >= 0 ? 'val profit' : 'val loss';
 
-                    if (!item || item.symbol === "NONE" || item.symbol === "MARKET CLOSED") {
-                        var msg = item.symbol === "MARKET CLOSED" ? 'शनिवार/रविवार (वीकेंड) के कारण मार्केट बंद है। बोट सोमवार को फिर से सक्रिय होगी 🏖️' : (currentCap <= 0 ? 'बजट ₹0 है, कृपया बजट दर्ज करें।' : 'एआई अगले स्टॉक को स्कैन कर रहा है...');
+                    if (!item || item.symbol === "NONE" || item.symbol === "MARKET CLOSED" || item.symbol === "PRE-OPEN") {
+                        var msg = item.symbol === "MARKET CLOSED" ? item.signal : (item.symbol === "PRE-OPEN" ? item.signal : (currentCap <= 0 ? 'बजट ₹0 है, कृपया बजट दर्ज करें।' : 'एआई अगले स्टॉक को स्कैन कर रहा है...'));
                         tbody.innerHTML = '<tr><td colspan="10" style="color:#facc15;">' + msg + '</td></tr>';
                     } else {
                         var pnlClass = item.pnl_pct >= 0 ? 'profit' : 'loss';
