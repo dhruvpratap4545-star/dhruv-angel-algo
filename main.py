@@ -11,11 +11,11 @@ from flask import Flask, jsonify, render_template_string, request
 app = Flask(__name__)
 load_dotenv()
 
-# ग्लोबल बजट वेरिएबल - अब यह शुरुआत में 0 या डायनेमिक रहेगा ताकि यूजर अपनी मर्जी का बजट सेट कर सके
+# ग्लोबल बजट वेरिएबल
 USER_CAPITAL = 20000.0  
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "") 
 
-# लाइव स्टॉक पूल (विभिन्न मूल्य वाले स्टॉक्स ताकि छोटे बजट पर भी Qty मिल सके)
+# लाइव स्टॉक पूल
 LIVE_MARKET_POOL = [
     "IDEA", "YESBANK", "SUZLON", "ZOMATO", "PNB", 
     "INFY", "HDFCBANK", "RELIANCE", "TCS", "ITC", 
@@ -44,9 +44,7 @@ realized_ledger = {
     "losses": 0
 }
 
-# पिछले पूर्ण हुए ट्रेड्स की हिस्ट्री रखने की सूची
 trade_history_log = []
-
 simulated_current_prices = {}
 
 def get_ai_market_decision(symbol, current_price):
@@ -92,7 +90,6 @@ def calculate_intraday_taxes(buy_value, sell_value):
 
 def get_profitable_stock_price(symbol, is_new_entry=False):
     global simulated_current_prices
-    # छोटे और बड़े दोनों प्रकार के स्टॉक प्राइस बेस
     if symbol in ["IDEA", "YESBANK", "SUZLON"]:
         base = 25.0
     elif symbol in ["ZOMATO", "PNB"]:
@@ -109,7 +106,7 @@ def get_profitable_stock_price(symbol, is_new_entry=False):
     return simulated_current_prices[symbol], base
 
 # ==========================================
-# BACKGROUND ENGINE LOOP (MARKET TIME & WEEKEND CHECK)
+# BACKGROUND ENGINE LOOP (STRICT MARKET TIMING)
 # ==========================================
 def trading_engine_loop():
     global active_trade_state, realized_ledger, USER_CAPITAL, trade_history_log
@@ -117,13 +114,13 @@ def trading_engine_loop():
     while True:
         try:
             now = datetime.datetime.now()
-            current_day = now.weekday() # सोमवार=0 से रविवार=6
+            current_day = now.weekday() # सोमवार=0 से शुक्रवार=4, शनि=5, रवि=6
             current_time = now.time()
             
             market_start = datetime.time(9, 15)
-            market_end = datetime.time(15, 20)  # ठीक 3:20 PM पर बंद
+            market_end = datetime.time(15, 20)  # सख्त पाबंदी: दोपहर 3:20 PM
 
-            # 1. वीकेंड चेक: शनिवार (5) और रविवार (6) को मार्केट बंद रहेगा
+            # 1. वीकेंड चेक (शनिवार और रविवार)
             if current_day >= 5:
                 active_trade_state.update({
                     "symbol": "MARKET CLOSED",
@@ -141,7 +138,7 @@ def trading_engine_loop():
                 time.sleep(10)
                 continue
 
-            # 2. समय चेक: 9:15 AM से पहले या 3:20 PM के बाद इंजन ट्रेड नहीं करेगा
+            # 2. समय से पहले (Morning < 9:15 AM)
             if current_time < market_start:
                 active_trade_state.update({
                     "symbol": "PRE-OPEN",
@@ -159,6 +156,7 @@ def trading_engine_loop():
                 time.sleep(5)
                 continue
 
+            # 3. समय के बाद (Evening > 3:20 PM) - अब यह किसी भी एक्टिव ट्रेड को तुरंत काटेगा और रोकेगा
             if current_time > market_end:
                 active_trade_state.update({
                     "symbol": "MARKET CLOSED",
@@ -176,7 +174,7 @@ def trading_engine_loop():
                 time.sleep(10)
                 continue
 
-            # 3. बजट चेक: यदि बजट 0 है
+            # 4. बजट चेक
             if USER_CAPITAL <= 0:
                 active_trade_state.update({
                     "symbol": "NONE",
@@ -189,6 +187,7 @@ def trading_engine_loop():
                 time.sleep(2)
                 continue
 
+            # बाजार खुलने के समय के भीतर ही यह ट्रेडिंग लॉजिक चलेगा
             if active_trade_state["mode"] == "WAITING":
                 selected_stock = random.choice(LIVE_MARKET_POOL)
                 price, base = get_profitable_stock_price(selected_stock, is_new_entry=True)
@@ -222,6 +221,11 @@ def trading_engine_loop():
                         })
             
             elif active_trade_state["mode"] == "ACTIVE":
+                # हर लूप में यह भी चेक होगा कि कहीं समय 3:20 तो नहीं पार हो गया
+                if datetime.datetime.now().time() > market_end:
+                    active_trade_state["mode"] = "WAITING"
+                    continue
+
                 symbol = active_trade_state["symbol"]
                 live_price, _ = get_profitable_stock_price(symbol)
                 entry_p = active_trade_state["entry_price"]
@@ -353,7 +357,6 @@ HTML_TEMPLATE = """
         </tbody>
     </table>
 
-    <!-- स्क्रॉलबल ट्रेड हिस्ट्री बॉक्स -->
     <div class="history-container">
         <h3 style="color: #38bdf8; margin: 0 0 10px 0; font-size: 16px;">📜 हालिया पूर्ण ट्रेड हिस्ट्री (Recent Trade History Log):</h3>
         <div class="history-scroll-box">
