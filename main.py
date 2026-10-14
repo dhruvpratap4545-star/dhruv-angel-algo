@@ -11,11 +11,11 @@ from flask import Flask, jsonify, render_template_string, request
 app = Flask(__name__)
 load_dotenv()
 
-# ग्लोबल बजट वेरिएबल
-USER_CAPITAL = 20000.0  
+# ग्लोबल बजट वेरिएबल - यूजर द्वारा सेट किया गया मान यहाँ सुरक्षित रहेगा
+USER_CAPITAL = 2000.0  
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "") 
 
-# लाइव स्टॉक पूल
+# लाइव स्टॉक पूल (विभिन्न मूल्य वाले स्टॉक्स ताकि छोटे से लेकर बड़े बजट तक पर Qty मिल सके)
 LIVE_MARKET_POOL = [
     "IDEA", "YESBANK", "SUZLON", "ZOMATO", "PNB", 
     "INFY", "HDFCBANK", "RELIANCE", "TCS", "ITC", 
@@ -44,7 +44,9 @@ realized_ledger = {
     "losses": 0
 }
 
+# पिछले पूर्ण हुए ट्रेड्स की हिस्ट्री रखने की सूची
 trade_history_log = []
+
 simulated_current_prices = {}
 
 def get_ai_market_decision(symbol, current_price):
@@ -106,61 +108,36 @@ def get_profitable_stock_price(symbol, is_new_entry=False):
     return simulated_current_prices[symbol], base
 
 # ==========================================
-# STRICT MARKET TIMING FUNCTION (09:20 AM to 03:20 PM, Mon-Fri)
-# ==========================================
-def is_market_active():
-    now = datetime.datetime.now()
-    current_day = now.weekday()  # 0=सोमवार, 4=शुक्रवार, 5=शनिवार, 6=रविवार
-    
-    # 1. वीकेंड चेक (शनिवार और रविवार)
-    if current_day >= 5:
-        return False, "WEEKEND HOLIDAY (MON-FRI ONLY) 🏖️"
-        
-    current_hour = now.hour
-    current_minute = now.minute
-    total_current_minutes = current_hour * 60 + current_minute
-    
-    # आपकी सख्त आवश्यकतानुसार: 9:20 AM से 3:20 PM
-    start_minutes = 9 * 60 + 20   # 09:20 AM = 560 मिनट
-    end_minutes = 15 * 60 + 20    # 03:20 PM = 920 मिनट
-    
-    if total_current_minutes < start_minutes:
-        return False, "WAITING FOR MARKET OPEN (09:20 AM) ⏰"
-        
-    if total_current_minutes > end_minutes:
-        return False, "MARKET CLOSED FOR TODAY (3:20 PM) 🌙"
-        
-    return True, "MARKET IS LIVE 🟢"
-
-# ==========================================
-# BACKGROUND ENGINE LOOP
+# BACKGROUND ENGINE LOOP (IST TIMEZONE & BUDGET CHECK)
 # ==========================================
 def trading_engine_loop():
     global active_trade_state, realized_ledger, USER_CAPITAL, trade_history_log
     
     while True:
         try:
-            is_active, status_message = is_market_active()
-            
-            # यदि बाजार बंद है या समय सीमा (9:20 AM - 3:20 PM) के बाहर है
-            if not is_active:
+            # सटीक भारतीय समय (IST: UTC + 5:30) प्राप्त करें ताकि रेंडर सर्वर पर समय की गड़बड़ी न हो
+            ist_now = datetime.datetime.utcnow() + datetime.timedelta(hours=5, minutes=30)
+            current_day = ist_now.weekday() # 0 = Monday, ..., 4 = Friday, 5 = Saturday, 6 = Sunday
+
+            # 1. वीकेंड चेक: यदि शनिवार (5) या रविवार (6) है, तो मार्केट बंद रहेगा
+            if current_day >= 5:
                 active_trade_state.update({
-                    "symbol": "MARKET CLOSED" if "CLOSED" in status_message or "WEEKEND" in status_message else "PRE-OPEN",
+                    "symbol": "MARKET CLOSED",
                     "allocated_capital": USER_CAPITAL,
                     "quantity": 0,
                     "entry_price": 0.0,
                     "live_price": 0.0,
                     "peak_price": 0.0,
-                    "signal": status_message,
+                    "signal": "WEEKEND HOLIDAY (MON-FRI ONLY) 🏖️",
                     "pnl_pct": 0.0,
                     "net_pnl_rs": 0.0,
                     "mode": "WAITING",
-                    "result": "TRADING STOPPED"
+                    "result": "MARKET CLOSED FOR WEEKEND"
                 })
-                time.sleep(3)
+                time.sleep(10)
                 continue
 
-            # बजट चेक
+            # 2. बजट चेक
             if USER_CAPITAL <= 0:
                 active_trade_state.update({
                     "symbol": "NONE",
@@ -180,6 +157,7 @@ def trading_engine_loop():
                 signal_text, action = get_ai_market_decision(selected_stock, price)
                 
                 if action:
+                    # यूजर के कस्टम बजट (चाहे ₹2000 हो या बाद में बढ़ाया गया बजट) के आधार पर Qty गणना
                     qty = int(USER_CAPITAL // price)
                     if qty > 0:
                         active_trade_state.update({
@@ -206,12 +184,6 @@ def trading_engine_loop():
                         })
             
             elif active_trade_state["mode"] == "ACTIVE":
-                # सुरक्षा चेक: हर लूप चक्र में जांचें कि क्या समय सीमा खत्म हो चुकी है
-                active_check, _ = is_market_active()
-                if not active_check:
-                    active_trade_state["mode"] = "WAITING"
-                    continue
-
                 symbol = active_trade_state["symbol"]
                 live_price, _ = get_profitable_stock_price(symbol)
                 entry_p = active_trade_state["entry_price"]
@@ -241,8 +213,9 @@ def trading_engine_loop():
                         result_text = "TARGET REACHED" if net_pnl > 0 else "SL HIT"
                         active_trade_state["result"] = result_text
                         
+                        # ट्रेड पूरा होते ही IST समय के साथ हिस्ट्री में जोड़ें
                         trade_history_log.insert(0, {
-                            "time": datetime.datetime.now().strftime("%H:%M:%S"),
+                            "time": ist_now.strftime("%H:%M:%S"),
                             "symbol": symbol,
                             "qty": qty,
                             "entry": entry_p,
@@ -299,11 +272,11 @@ HTML_TEMPLATE = """
 </head>
 <body>
     <h1>🛡 ओपनरूटर AI पावर्ड स्कैल्पिंग इंजन</h1>
-    <p class="subtitle">स्मार्ट एआई ब्रेन एक्टिव: मार्केट समय (सोमवार - शुक्रवार, सुबह 9:20 से दोपहर 3:20) | समय: <span id="clock">--:--:--</span></p>
+    <p class="subtitle">स्मार्ट एआई ब्रेन एक्टिव: भारतीय समयानुसार (IST) लाइव ट्रेड्स | समय: <span id="clock">--:--:--</span></p>
 
     <div class="banner">
-        <div><b>📊 मार्केट शेड्यूल:</b> <span style="color: #38bdf8;">सोमवार से शुक्रवार (09:20 AM - 03:20 PM) 🟢</span></div>
-        <div><b>मोड:</b> <span style="color: #38bdf8;">सख्त समय पाबंद ऑटोमेशन ✅</span></div>
+        <div><b>📊 मार्केट शेड्यूल:</b> <span style="color: #38bdf8;">सोमवार से शुक्रवार (IST टाइम एक्टिव) 🟢</span></div>
+        <div><b>मोड:</b> <span style="color: #38bdf8;">कस्टम बजट यूजर कंट्रोल ✅</span></div>
     </div>
 
     <div class="control-panel">
@@ -343,13 +316,14 @@ HTML_TEMPLATE = """
         </tbody>
     </table>
 
+    <!-- स्क्रॉलबल ट्रेड हिस्ट्री बॉक्स -->
     <div class="history-container">
         <h3 style="color: #38bdf8; margin: 0 0 10px 0; font-size: 16px;">📜 हालिया पूर्ण ट्रेड हिस्ट्री (Recent Trade History Log):</h3>
         <div class="history-scroll-box">
             <table>
                 <thead>
                     <tr>
-                        <th>समय</th>
+                        <th>समय (IST)</th>
                         <th>स्टॉक</th>
                         <th>मात्रा (Qty)</th>
                         <th>एंट्री प्राइस</th>
@@ -409,8 +383,8 @@ HTML_TEMPLATE = """
                     livePnlElem.innerText = (item.net_pnl_rs >= 0 ? '+₹' : '-₹') + Math.abs(item.net_pnl_rs).toFixed(2);
                     livePnlElem.className = item.net_pnl_rs >= 0 ? 'val profit' : 'val loss';
 
-                    if (!item || item.symbol === "NONE" || item.symbol === "MARKET CLOSED" || item.symbol === "PRE-OPEN") {
-                        var msg = item.symbol === "MARKET CLOSED" ? item.signal : (item.symbol === "PRE-OPEN" ? item.signal : (currentCap <= 0 ? 'बजट ₹0 है, कृपया बजट दर्ज करें।' : 'एआई अगले स्टॉक को स्कैन कर रहा है...'));
+                    if (!item || item.symbol === "NONE" || item.symbol === "MARKET CLOSED") {
+                        var msg = item.symbol === "MARKET CLOSED" ? 'शनिवार/रविवार (वीकेंड) के कारण मार्केट बंद है। बोट सोमवार को फिर से सक्रिय होगी 🏖️' : (currentCap <= 0 ? 'बजट ₹0 है, कृपया बजट दर्ज करें।' : 'एआई अगले स्टॉक को स्कैन कर रहा है...');
                         tbody.innerHTML = '<tr><td colspan="10" style="color:#facc15;">' + msg + '</td></tr>';
                     } else {
                         var pnlClass = item.pnl_pct >= 0 ? 'profit' : 'loss';
